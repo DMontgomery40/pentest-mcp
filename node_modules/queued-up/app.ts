@@ -1,0 +1,12 @@
+///<reference path='index.d.ts'/>
+import Queue = require('./index');
+var q : Queue;
+q = new Queue(function(input){
+	q.done(input);
+});
+q.on("complete", function(data){
+	console.log("External complete called" + data);
+});
+
+q.add([1,2,3,4,5,6,7,8,9]);
+q.run();
