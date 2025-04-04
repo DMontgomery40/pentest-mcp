@@ -1,0 +1,11 @@
+export enum UserMode {
+  UNKNOWN = 'unknown',
+  STUDENT = 'student',
+  PROFESSIONAL = 'professional',
+}
+
+// Interface for storing user session state (could be expanded)
+export interface UserSession {
+  mode: UserMode;
+  history: string[]; // To store commands/results for documentation
+} 
