@@ -169,9 +169,8 @@ req.acceptsCharsets = function(){
  * @public
  */
 
-req.acceptsLanguages = function(){
-  var accept = accepts(this);
-  return accept.languages.apply(accept, arguments);
+req.acceptsLanguages = function(...languages) {
+  return accepts(this).languages(...languages);
 };
 
 /**
@@ -283,12 +282,12 @@ req.is = function is(types) {
  */
 
 defineGetter(req, 'protocol', function protocol(){
-  var proto = this.connection.encrypted
+  var proto = this.socket.encrypted
     ? 'https'
     : 'http';
   var trust = this.app.get('trust proxy fn');
 
-  if (!trust(this.connection.remoteAddress, 0)) {
+  if (!trust(this.socket.remoteAddress, 0)) {
     return proto;
   }
 
@@ -407,7 +406,7 @@ defineGetter(req, 'host', function host(){
   var trust = this.app.get('trust proxy fn');
   var val = this.get('X-Forwarded-Host');
 
-  if (!val || !trust(this.connection.remoteAddress, 0)) {
+  if (!val || !trust(this.socket.remoteAddress, 0)) {
     val = this.get('Host');
   } else if (val.indexOf(',') !== -1) {
     // Note: X-Forwarded-Host is normally only ever a

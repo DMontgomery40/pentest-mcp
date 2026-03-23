@@ -91,7 +91,15 @@ export type Token = Text | Parameter | Wildcard | Group;
  */
 export declare class TokenData {
     readonly tokens: Token[];
-    constructor(tokens: Token[]);
+    readonly originalPath?: string | undefined;
+    constructor(tokens: Token[], originalPath?: string | undefined);
+}
+/**
+ * ParseError is thrown when there is an error processing the path.
+ */
+export declare class PathError extends TypeError {
+    readonly originalPath: string | undefined;
+    constructor(message: string, originalPath: string | undefined);
 }
 /**
  * Parse a string for the raw tokens.
@@ -100,7 +108,7 @@ export declare function parse(str: string, options?: ParseOptions): TokenData;
 /**
  * Compile a string to a template function for the path.
  */
-export declare function compile<P extends ParamData = ParamData>(path: Path, options?: CompileOptions & ParseOptions): (data?: P) => string;
+export declare function compile<P extends ParamData = ParamData>(path: Path, options?: CompileOptions & ParseOptions): (params?: P) => string;
 export type ParamData = Partial<Record<string, string | string[]>>;
 export type PathFunction<P extends ParamData> = (data?: P) => string;
 /**

@@ -66,7 +66,7 @@ fn("/users/123/delete");
 
 The `match` function returns a function for matching strings against a path:
 
-- **path** String or array of strings.
+- **path** String, `TokenData` object, or array of strings and `TokenData` objects.
 - **options** _(optional)_ (Extends [pathToRegexp](#pathToRegexp) options)
   - **decode** Function for decoding strings to params, or `false` to disable all processing. (default: `decodeURIComponent`)
 
@@ -78,9 +78,9 @@ const fn = match("/foo/:bar");
 
 ## PathToRegexp
 
-The `pathToRegexp` function returns a regular expression for matching strings against paths. It
+The `pathToRegexp` function returns the `regexp` for matching strings against paths, and an array of `keys` for understanding the `RegExp#exec` matches.
 
-- **path** String or array of strings.
+- **path** String, `TokenData` object, or array of strings and `TokenData` objects.
 - **options** _(optional)_ (See [parse](#parse) for more options)
   - **sensitive** Regexp will be case sensitive. (default: `false`)
   - **end** Validate the match reaches the end of the string. (default: `true`)
@@ -89,13 +89,15 @@ The `pathToRegexp` function returns a regular expression for matching strings ag
 
 ```js
 const { regexp, keys } = pathToRegexp("/foo/:bar");
+
+regexp.exec("/foo/123"); //=> ["/foo/123", "123"]
 ```
 
 ## Compile ("Reverse" Path-To-RegExp)
 
 The `compile` function will return a function for transforming parameters into a valid path:
 
-- **path** A string.
+- **path** A string or `TokenData` object.
 - **options** (See [parse](#parse) for more options)
   - **delimiter** The default delimiter for segments, e.g. `[^/]` for `:named` parameters. (default: `'/'`)
   - **encode** Function for encoding input strings for output into the path, or `false` to disable entirely. (default: `encodeURIComponent`)
@@ -119,15 +121,17 @@ toPathRaw({ id: "%3A%2F" }); //=> "/user/%3A%2F"
 
 ## Stringify
 
-Transform `TokenData` (a sequence of tokens) back into a Path-to-RegExp string.
+Transform a `TokenData` object to a Path-to-RegExp string.
 
-- **data** A `TokenData` instance
+- **data** A `TokenData` object.
 
 ```js
-const data = new TokenData([
-  { type: "text", value: "/" },
-  { type: "param", name: "foo" },
-]);
+const data = {
+  tokens: [
+    { type: "text", value: "/" },
+    { type: "param", name: "foo" },
+  ],
+};
 
 const path = stringify(data); //=> "/:foo"
 ```
@@ -139,7 +143,7 @@ const path = stringify(data); //=> "/:foo"
 
 ### Parse
 
-The `parse` function accepts a string and returns `TokenData`, the set of tokens and other metadata parsed from the input string. `TokenData` is can used with `match` and `compile`.
+The `parse` function accepts a string and returns `TokenData`, which can be used with `match` and `compile`.
 
 - **path** A string.
 - **options** _(optional)_
@@ -147,20 +151,24 @@ The `parse` function accepts a string and returns `TokenData`, the set of tokens
 
 ### Tokens
 
-`TokenData` is a sequence of tokens, currently of types `text`, `parameter`, `wildcard`, or `group`.
+`TokenData` has two properties:
+
+- **tokens** A sequence of tokens, currently of types `text`, `parameter`, `wildcard`, or `group`.
+- **originalPath** The original path used with `parse`, shown in error messages to assist debugging.
 
 ### Custom path
 
-In some applications, you may not be able to use the `path-to-regexp` syntax, but still want to use this library for `match` and `compile`. For example:
+In some applications you may not be able to use the `path-to-regexp` syntax, but you still want to use this library for `match` and `compile`. For example:
 
 ```js
-import { TokenData, match } from "path-to-regexp";
+import { match } from "path-to-regexp";
 
 const tokens = [
   { type: "text", value: "/" },
   { type: "parameter", name: "foo" },
 ];
-const path = new TokenData(tokens);
+const originalPath = "/[foo]"; // To help debug error messages.
+const path = { tokens, originalPath };
 const fn = match(path);
 
 fn("/test"); //=> { path: '/test', index: 0, params: { foo: 'test' } }
@@ -170,31 +178,31 @@ fn("/test"); //=> { path: '/test', index: 0, params: { foo: 'test' } }
 
 An effort has been made to ensure ambiguous paths from previous releases throw an error. This means you might be seeing an error when things worked before.
 
+### Missing parameter name
+
+Parameter names must be provided after `:` or `*`, for example `/*path`. They can be valid JavaScript identifiers (e.g. `:myName`) or JSON strings (`:"my-name"`).
+
 ### Unexpected `?` or `+`
 
 In past releases, `?`, `*`, and `+` were used to denote optional or repeating parameters. As an alternative, try these:
 
-- For optional (`?`), use an empty segment in a group such as `/:file{.:ext}`.
-- For repeating (`+`), only wildcard matching is supported, such as `/*path`.
-- For optional repeating (`*`), use a group and a wildcard parameter such as `/files{/*path}`.
+- For optional (`?`), use braces: `/file{.:ext}`.
+- For one or more (`+`), use a wildcard: `/*path`.
+- For zero or more (`*`), use both: `/files{/*path}`.
 
 ### Unexpected `(`, `)`, `[`, `]`, etc.
 
-Previous versions of Path-to-RegExp used these for RegExp features. This version no longer supports them so they've been reserved to avoid ambiguity. To use these characters literally, escape them with a backslash, e.g. `"\\("`.
-
-### Missing parameter name
-
-Parameter names must be provided after `:` or `*`, and they must be a valid JavaScript identifier. If you want an parameter name that isn't a JavaScript identifier, such as starting with a number, you can wrap the name in quotes like `:"my-name"`.
+Previous versions of Path-to-RegExp used these for RegExp features. This version no longer supports them so they've been reserved to avoid ambiguity. To match these characters literally, escape them with a backslash, e.g. `"\\("`.
 
 ### Unterminated quote
 
-Parameter names can be wrapped in double quote characters, and this error means you forgot to close the quote character.
+Parameter names can be wrapped in double quote characters, and this error means you forgot to close the quote character. For example, `:"foo`.
 
 ### Express <= 4.x
 
 Path-To-RegExp breaks compatibility with Express <= `4.x` in the following ways:
 
-- The wildcard `*` must have a name, matching the behavior of parameters `:`.
+- The wildcard `*` must have a name and matches the behavior of parameters `:`.
 - The optional character `?` is no longer supported, use braces instead: `/:file{.:ext}`.
 - Regexp characters are not supported.
 - Some characters have been reserved to avoid confusion during upgrade (`()[]?+!`).

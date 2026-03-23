@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TokenData = void 0;
+exports.PathError = exports.TokenData = void 0;
 exports.parse = parse;
 exports.compile = compile;
 exports.match = match;
@@ -10,7 +10,6 @@ const DEFAULT_DELIMITER = "/";
 const NOOP_VALUE = (value) => value;
 const ID_START = /^[$_\p{ID_Start}]$/u;
 const ID_CONTINUE = /^[$\u200c\u200d\p{ID_Continue}]$/u;
-const DEBUG_URL = "https://git.new/pathToRegexpError";
 const SIMPLE_TOKENS = {
     // Groups.
     "{": "{",
@@ -28,7 +27,7 @@ const SIMPLE_TOKENS = {
  * Escape text for stringify to path.
  */
 function escapeText(str) {
-    return str.replace(/[{}()\[\]+?!:*]/g, "\\$&");
+    return str.replace(/[{}()\[\]+?!:*\\]/g, "\\$&");
 }
 /**
  * Escape a regular expression string.
@@ -37,161 +36,135 @@ function escape(str) {
     return str.replace(/[.+*?^${}()[\]|/\\]/g, "\\$&");
 }
 /**
- * Tokenize input string.
- */
-function* lexer(str) {
-    const chars = [...str];
-    let i = 0;
-    function name() {
-        let value = "";
-        if (ID_START.test(chars[++i])) {
-            value += chars[i];
-            while (ID_CONTINUE.test(chars[++i])) {
-                value += chars[i];
-            }
-        }
-        else if (chars[i] === '"') {
-            let pos = i;
-            while (i < chars.length) {
-                if (chars[++i] === '"') {
-                    i++;
-                    pos = 0;
-                    break;
-                }
-                if (chars[i] === "\\") {
-                    value += chars[++i];
-                }
-                else {
-                    value += chars[i];
-                }
-            }
-            if (pos) {
-                throw new TypeError(`Unterminated quote at ${pos}: ${DEBUG_URL}`);
-            }
-        }
-        if (!value) {
-            throw new TypeError(`Missing parameter name at ${i}: ${DEBUG_URL}`);
-        }
-        return value;
-    }
-    while (i < chars.length) {
-        const value = chars[i];
-        const type = SIMPLE_TOKENS[value];
-        if (type) {
-            yield { type, index: i++, value };
-        }
-        else if (value === "\\") {
-            yield { type: "ESCAPED", index: i++, value: chars[i++] };
-        }
-        else if (value === ":") {
-            const value = name();
-            yield { type: "PARAM", index: i, value };
-        }
-        else if (value === "*") {
-            const value = name();
-            yield { type: "WILDCARD", index: i, value };
-        }
-        else {
-            yield { type: "CHAR", index: i, value: chars[i++] };
-        }
-    }
-    return { type: "END", index: i, value: "" };
-}
-class Iter {
-    constructor(tokens) {
-        this.tokens = tokens;
-    }
-    peek() {
-        if (!this._peek) {
-            const next = this.tokens.next();
-            this._peek = next.value;
-        }
-        return this._peek;
-    }
-    tryConsume(type) {
-        const token = this.peek();
-        if (token.type !== type)
-            return;
-        this._peek = undefined; // Reset after consumed.
-        return token.value;
-    }
-    consume(type) {
-        const value = this.tryConsume(type);
-        if (value !== undefined)
-            return value;
-        const { type: nextType, index } = this.peek();
-        throw new TypeError(`Unexpected ${nextType} at ${index}, expected ${type}: ${DEBUG_URL}`);
-    }
-    text() {
-        let result = "";
-        let value;
-        while ((value = this.tryConsume("CHAR") || this.tryConsume("ESCAPED"))) {
-            result += value;
-        }
-        return result;
-    }
-}
-/**
  * Tokenized path instance.
  */
 class TokenData {
-    constructor(tokens) {
+    constructor(tokens, originalPath) {
         this.tokens = tokens;
+        this.originalPath = originalPath;
     }
 }
 exports.TokenData = TokenData;
+/**
+ * ParseError is thrown when there is an error processing the path.
+ */
+class PathError extends TypeError {
+    constructor(message, originalPath) {
+        let text = message;
+        if (originalPath)
+            text += `: ${originalPath}`;
+        text += `; visit https://git.new/pathToRegexpError for info`;
+        super(text);
+        this.originalPath = originalPath;
+    }
+}
+exports.PathError = PathError;
 /**
  * Parse a string for the raw tokens.
  */
 function parse(str, options = {}) {
     const { encodePath = NOOP_VALUE } = options;
-    const it = new Iter(lexer(str));
-    function consume(endType) {
-        const tokens = [];
-        while (true) {
-            const path = it.text();
-            if (path)
-                tokens.push({ type: "text", value: encodePath(path) });
-            const param = it.tryConsume("PARAM");
-            if (param) {
-                tokens.push({
-                    type: "param",
-                    name: param,
-                });
-                continue;
+    const chars = [...str];
+    const tokens = [];
+    let index = 0;
+    let pos = 0;
+    function name() {
+        let value = "";
+        if (ID_START.test(chars[index])) {
+            do {
+                value += chars[index++];
+            } while (ID_CONTINUE.test(chars[index]));
+        }
+        else if (chars[index] === '"') {
+            let quoteStart = index;
+            while (index++ < chars.length) {
+                if (chars[index] === '"') {
+                    index++;
+                    quoteStart = 0;
+                    break;
+                }
+                // Increment over escape characters.
+                if (chars[index] === "\\")
+                    index++;
+                value += chars[index];
             }
-            const wildcard = it.tryConsume("WILDCARD");
-            if (wildcard) {
-                tokens.push({
-                    type: "wildcard",
-                    name: wildcard,
-                });
-                continue;
+            if (quoteStart) {
+                throw new PathError(`Unterminated quote at index ${quoteStart}`, str);
             }
-            const open = it.tryConsume("{");
-            if (open) {
-                tokens.push({
-                    type: "group",
-                    tokens: consume("}"),
-                });
-                continue;
-            }
-            it.consume(endType);
-            return tokens;
+        }
+        if (!value) {
+            throw new PathError(`Missing parameter name at index ${index}`, str);
+        }
+        return value;
+    }
+    while (index < chars.length) {
+        const value = chars[index];
+        const type = SIMPLE_TOKENS[value];
+        if (type) {
+            tokens.push({ type, index: index++, value });
+        }
+        else if (value === "\\") {
+            tokens.push({ type: "escape", index: index++, value: chars[index++] });
+        }
+        else if (value === ":") {
+            tokens.push({ type: "param", index: index++, value: name() });
+        }
+        else if (value === "*") {
+            tokens.push({ type: "wildcard", index: index++, value: name() });
+        }
+        else {
+            tokens.push({ type: "char", index: index++, value });
         }
     }
-    const tokens = consume("END");
-    return new TokenData(tokens);
+    tokens.push({ type: "end", index, value: "" });
+    function consumeUntil(endType) {
+        const output = [];
+        while (true) {
+            const token = tokens[pos++];
+            if (token.type === endType)
+                break;
+            if (token.type === "char" || token.type === "escape") {
+                let path = token.value;
+                let cur = tokens[pos];
+                while (cur.type === "char" || cur.type === "escape") {
+                    path += cur.value;
+                    cur = tokens[++pos];
+                }
+                output.push({
+                    type: "text",
+                    value: encodePath(path),
+                });
+                continue;
+            }
+            if (token.type === "param" || token.type === "wildcard") {
+                output.push({
+                    type: token.type,
+                    name: token.value,
+                });
+                continue;
+            }
+            if (token.type === "{") {
+                output.push({
+                    type: "group",
+                    tokens: consumeUntil("}"),
+                });
+                continue;
+            }
+            throw new PathError(`Unexpected ${token.type} at index ${token.index}, expected ${endType}`, str);
+        }
+        return output;
+    }
+    return new TokenData(consumeUntil("end"), str);
 }
 /**
  * Compile a string to a template function for the path.
  */
 function compile(path, options = {}) {
     const { encode = encodeURIComponent, delimiter = DEFAULT_DELIMITER } = options;
-    const data = path instanceof TokenData ? path : parse(path, options);
+    const data = typeof path === "object" ? path : parse(path, options);
     const fn = tokensToFunction(data.tokens, delimiter, encode);
-    return function path(data = {}) {
-        const [path, ...missing] = fn(data);
+    return function path(params = {}) {
+        const [path, ...missing] = fn(params);
         if (missing.length) {
             throw new TypeError(`Missing parameters: ${missing.join(", ")}`);
         }
@@ -288,14 +261,12 @@ function match(path, options = {}) {
 function pathToRegexp(path, options = {}) {
     const { delimiter = DEFAULT_DELIMITER, end = true, sensitive = false, trailing = true, } = options;
     const keys = [];
-    const sources = [];
     const flags = sensitive ? "" : "i";
-    const paths = Array.isArray(path) ? path : [path];
-    const items = paths.map((path) => path instanceof TokenData ? path : parse(path, options));
-    for (const { tokens } of items) {
-        for (const seq of flatten(tokens, 0, [])) {
-            const regexp = sequenceToRegExp(seq, delimiter, keys);
-            sources.push(regexp);
+    const sources = [];
+    for (const input of pathsToArray(path, [])) {
+        const data = typeof input === "object" ? input : parse(input, options);
+        for (const tokens of flatten(data.tokens, 0, [])) {
+            sources.push(toRegExpSource(tokens, delimiter, keys, data.originalPath));
         }
     }
     let pattern = `^(?:${sources.join("|")})`;
@@ -306,6 +277,19 @@ function pathToRegexp(path, options = {}) {
     return { regexp, keys };
 }
 /**
+ * Convert a path or array of paths into a flat array.
+ */
+function pathsToArray(paths, init) {
+    if (Array.isArray(paths)) {
+        for (const p of paths)
+            pathsToArray(p, init);
+    }
+    else {
+        init.push(paths);
+    }
+    return init;
+}
+/**
  * Generate a flat list of sequence tokens from the given tokens.
  */
 function* flatten(tokens, index, init) {
@@ -314,8 +298,7 @@ function* flatten(tokens, index, init) {
     }
     const token = tokens[index];
     if (token.type === "group") {
-        const fork = init.slice();
-        for (const seq of flatten(token.tokens, 0, fork)) {
+        for (const seq of flatten(token.tokens, 0, init.slice())) {
             yield* flatten(tokens, index + 1, seq);
         }
     }
@@ -327,12 +310,11 @@ function* flatten(tokens, index, init) {
 /**
  * Transform a flat sequence of tokens into a regular expression.
  */
-function sequenceToRegExp(tokens, delimiter, keys) {
+function toRegExpSource(tokens, delimiter, keys, originalPath) {
     let result = "";
     let backtrack = "";
     let isSafeSegmentParam = true;
-    for (let i = 0; i < tokens.length; i++) {
-        const token = tokens[i];
+    for (const token of tokens) {
         if (token.type === "text") {
             result += escape(token.value);
             backtrack += token.value;
@@ -341,7 +323,7 @@ function sequenceToRegExp(tokens, delimiter, keys) {
         }
         if (token.type === "param" || token.type === "wildcard") {
             if (!isSafeSegmentParam && !backtrack) {
-                throw new TypeError(`Missing text after "${token.name}": ${DEBUG_URL}`);
+                throw new PathError(`Missing text before "${token.name}" ${token.type}`, originalPath);
             }
             if (token.type === "param") {
                 result += `(${negate(delimiter, isSafeSegmentParam ? "" : backtrack)}+)`;
@@ -357,6 +339,9 @@ function sequenceToRegExp(tokens, delimiter, keys) {
     }
     return result;
 }
+/**
+ * Block backtracking on previous text and ignore delimiter string.
+ */
 function negate(delimiter, backtrack) {
     if (backtrack.length < 2) {
         if (delimiter.length < 2)
@@ -369,35 +354,56 @@ function negate(delimiter, backtrack) {
     return `(?:(?!${escape(backtrack)}|${escape(delimiter)})[\\s\\S])`;
 }
 /**
+ * Stringify an array of tokens into a path string.
+ */
+function stringifyTokens(tokens) {
+    let value = "";
+    let i = 0;
+    function name(value) {
+        const isSafe = isNameSafe(value) && isNextNameSafe(tokens[i]);
+        return isSafe ? value : JSON.stringify(value);
+    }
+    while (i < tokens.length) {
+        const token = tokens[i++];
+        if (token.type === "text") {
+            value += escapeText(token.value);
+            continue;
+        }
+        if (token.type === "group") {
+            value += `{${stringifyTokens(token.tokens)}}`;
+            continue;
+        }
+        if (token.type === "param") {
+            value += `:${name(token.name)}`;
+            continue;
+        }
+        if (token.type === "wildcard") {
+            value += `*${name(token.name)}`;
+            continue;
+        }
+        throw new TypeError(`Unknown token type: ${token.type}`);
+    }
+    return value;
+}
+/**
  * Stringify token data into a path string.
  */
 function stringify(data) {
-    return data.tokens
-        .map(function stringifyToken(token, index, tokens) {
-        if (token.type === "text")
-            return escapeText(token.value);
-        if (token.type === "group") {
-            return `{${token.tokens.map(stringifyToken).join("")}}`;
-        }
-        const isSafe = isNameSafe(token.name) && isNextNameSafe(tokens[index + 1]);
-        const key = isSafe ? token.name : JSON.stringify(token.name);
-        if (token.type === "param")
-            return `:${key}`;
-        if (token.type === "wildcard")
-            return `*${key}`;
-        throw new TypeError(`Unexpected token: ${token}`);
-    })
-        .join("");
+    return stringifyTokens(data.tokens);
 }
+/**
+ * Validate the parameter name contains valid ID characters.
+ */
 function isNameSafe(name) {
     const [first, ...rest] = name;
-    if (!ID_START.test(first))
-        return false;
-    return rest.every((char) => ID_CONTINUE.test(char));
+    return ID_START.test(first) && rest.every((char) => ID_CONTINUE.test(char));
 }
+/**
+ * Validate the next token does not interfere with the current param name.
+ */
 function isNextNameSafe(token) {
-    if ((token === null || token === void 0 ? void 0 : token.type) !== "text")
-        return true;
-    return !ID_CONTINUE.test(token.value[0]);
+    if (token && token.type === "text")
+        return !ID_CONTINUE.test(token.value[0]);
+    return true;
 }
 //# sourceMappingURL=index.js.map
